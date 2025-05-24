@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""
+LibGen Book Search and Download Script
+Searches for books from books.txt and allows selective downloading
+"""
+
 import os
 import re
 import requests
@@ -7,6 +12,7 @@ from urllib.parse import urlparse
 import time
 
 def parse_books_file(filename='books.txt'):
+    """Parse the books.txt file and extract author and title"""
     books = []
     
     if not os.path.exists(filename):
@@ -19,6 +25,7 @@ def parse_books_file(filename='books.txt'):
             if not line:
                 continue
             
+            # Parse format: "Author - Title"
             if ' - ' in line:
                 author, title = line.split(' - ', 1)
                 books.append({
@@ -31,7 +38,8 @@ def parse_books_file(filename='books.txt'):
     
     return books
 
-def search_book(query, max_results=100):
+def search_book(query, max_results=10):
+    """Search for a book using libgen-api"""
     try:
         s = LibgenSearch()
         results = s.search_title(query)
@@ -178,7 +186,8 @@ def main():
     
     print(f"Found {len(books)} books to search for.")
     
-    all_search_results = []
+    # Search for each book and collect downloads
+    downloads = []
     
     # Search for each book
     for book in books:
@@ -201,66 +210,43 @@ def main():
         if results:
             formatted_results = format_results(results)
             display_results(book, formatted_results)
-            all_search_results.append({
-                'book': book,
-                'results': formatted_results
-            })
+            
+            # Ask for selection immediately after showing results
+            print(f"\nSelect books to download for: {book['original_line']}")
+            print("Enter numbers separated by commas (e.g., 1,3,5) or 'skip' to skip:")
+            
+            try:
+                choice = input("> ").strip().lower()
+                
+                if choice != 'skip' and choice != '':
+                    # Parse selection
+                    selected_indices = []
+                    for num_str in choice.split(','):
+                        try:
+                            num = int(num_str.strip())
+                            if 1 <= num <= len(formatted_results):
+                                selected_indices.append(num - 1)
+                            else:
+                                print(f"Invalid selection: {num}")
+                        except ValueError:
+                            print(f"Invalid input: {num_str}")
+                    
+                    # Add selected books to download list
+                    for idx in selected_indices:
+                        result = formatted_results[idx]
+                        downloads.append({
+                            'book': book,
+                            'result': result
+                        })
+                        print(f"✓ Added: {result.get('Title', 'Unknown Title')}")
+                        
+            except KeyboardInterrupt:
+                print("\nSelection cancelled.")
+                break
         else:
             print(f"No results found for: {book['original_line']}")
     
-    # Interactive selection and download
-    if not all_search_results:
-        print("\nNo books found to download.")
-        return
-    
-    print(f"\n{'='*80}")
-    print("DOWNLOAD SELECTION")
-    print(f"{'='*80}")
-    
-    downloads = []
-    
-    for search_result in all_search_results:
-        book = search_result['book']
-        results = search_result['results']
-        
-        if not results:
-            continue
-        
-        print(f"\nSelect books to download for: {book['original_line']}")
-        print("Enter numbers separated by commas (e.g., 1,3,5) or 'skip' to skip:")
-        
-        try:
-            choice = input("> ").strip().lower()
-            
-            if choice == 'skip':
-                continue
-            
-            if choice == '':
-                continue
-            
-            # Parse selection
-            selected_indices = []
-            for num_str in choice.split(','):
-                try:
-                    num = int(num_str.strip())
-                    if 1 <= num <= len(results):
-                        selected_indices.append(num - 1)
-                    else:
-                        print(f"Invalid selection: {num}")
-                except ValueError:
-                    print(f"Invalid input: {num_str}")
-            
-            # Add selected books to download list
-            for idx in selected_indices:
-                result = results[idx]
-                downloads.append({
-                    'book': book,
-                    'result': result
-                })
-                
-        except KeyboardInterrupt:
-            print("\nSelection cancelled.")
-            break
+    # Download all selected books at the end
     
     # Download selected books
     if downloads:
@@ -310,6 +296,7 @@ def main():
         print("\nNo books selected for download.")
 
 if __name__ == "__main__":
+    # Check if libgen-api is installed
     try:
         import libgen_api
     except ImportError:
