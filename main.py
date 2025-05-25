@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-LibGen Book Search and Download Script
-Searches for books from books.txt and allows selective downloading
-"""
 
 import os
 import re
@@ -12,7 +8,6 @@ from urllib.parse import urlparse
 import time
 
 def parse_books_file(filename='books.txt'):
-    """Parse the books.txt file and extract author and title"""
     books = []
     
     if not os.path.exists(filename):
@@ -25,7 +20,6 @@ def parse_books_file(filename='books.txt'):
             if not line:
                 continue
             
-            # Parse format: "Author - Title"
             if ' - ' in line:
                 author, title = line.split(' - ', 1)
                 books.append({
@@ -39,13 +33,11 @@ def parse_books_file(filename='books.txt'):
     return books
 
 def search_book(query, max_results=10):
-    """Search for a book using libgen-api"""
     try:
         s = LibgenSearch()
         results = s.search_title(query)
         
         if not results:
-            # Try searching by author if title search fails
             results = s.search_author(query)
         
         return results[:max_results]
@@ -54,20 +46,16 @@ def search_book(query, max_results=10):
         return []
 
 def format_results(results, prefer_pdf=True, prefer_newer=True):
-    """Format and sort results, preferring PDF and newer editions"""
     if not results:
         return []
     
-    # Filter and score results
     scored_results = []
     for result in results:
         score = 0
         
-        # Prefer PDF format
         if prefer_pdf and result.get('Extension', '').lower() == 'pdf':
             score += 10
         
-        # Prefer newer publications (if year is available)
         try:
             year = int(result.get('Year', 0))
             if year > 2000:
@@ -75,24 +63,21 @@ def format_results(results, prefer_pdf=True, prefer_newer=True):
         except (ValueError, TypeError):
             pass
         
-        # Prefer smaller file sizes (more reasonable for downloads)
         try:
             size_str = result.get('Size', '0')
             size_mb = parse_file_size(size_str)
-            if 1 < size_mb < 100:  # Prefer books between 1MB and 100MB
+            if 1 < size_mb < 100:
                 score += 5
         except:
             pass
         
         scored_results.append((score, result))
     
-    # Sort by score (descending)
     scored_results.sort(key=lambda x: x[0], reverse=True)
     
     return [result for score, result in scored_results]
 
 def parse_file_size(size_str):
-    """Parse file size string to MB"""
     if not size_str:
         return 0
     
@@ -105,12 +90,11 @@ def parse_file_size(size_str):
         elif 'gb' in size_str:
             return float(size_str.replace('gb', '').strip()) * 1024
         else:
-            return float(size_str) / (1024 * 1024)  # Assume bytes
+            return float(size_str) / (1024 * 1024)
     except:
         return 0
 
 def display_results(book_info, results):
-    """Display search results in a formatted way"""
     print(f"\n{'='*80}")
     print(f"Results for: {book_info['original_line']}")
     print(f"{'='*80}")
@@ -126,12 +110,13 @@ def display_results(book_info, results):
         extension = result.get('Extension', 'Unknown')
         size = result.get('Size', 'Unknown')
         pages = result.get('Pages', 'Unknown')
+        publisher = result.get('Publisher', 'Unknown')
         
         print(f"\n{i}. {title}")
         print(f"   Author: {author}")
+        print(f"   Publisher: {publisher}")
         print(f"   Year: {year} | Format: {extension} | Size: {size} | Pages: {pages}")
         
-        # Show first few words of description if available
         desc = result.get('Descr', '')
         if desc and len(desc) > 100:
             desc = desc[:100] + "..."
@@ -139,7 +124,6 @@ def display_results(book_info, results):
             print(f"   Description: {desc}")
 
 def get_download_links(result):
-    """Get download links for a specific result"""
     try:
         s = LibgenSearch()
         download_links = s.resolve_download_links(result)
@@ -149,7 +133,6 @@ def get_download_links(result):
         return {}
 
 def download_file(url, filename, chunk_size=8192):
-    """Download a file from URL with progress indication"""
     try:
         response = requests.get(url, stream=True)
         response.raise_for_status()
@@ -178,7 +161,6 @@ def main():
     print("LibGen Book Search and Download Tool")
     print("=" * 40)
     
-    # Parse books from file
     books = parse_books_file()
     if not books:
         print("No books found in books.txt")
@@ -186,14 +168,14 @@ def main():
     
     print(f"Found {len(books)} books to search for.")
     
-    # Search for each book and collect downloads
     downloads = []
+    not_found = []
+    not_downloaded = []
+    total_books = len(books)
     
-    # Search for each book
-    for book in books:
-        print(f"\nSearching for: {book['original_line']}")
+    for book_num, book in enumerate(books, 1):
+        print(f"\n[{book_num}/{total_books}] Searching for: {book['original_line']}")
         
-        # Try different search strategies
         search_queries = [
             f"{book['author']} {book['title']}",
             book['title'],
@@ -205,50 +187,59 @@ def main():
             results = search_book(query)
             if results:
                 break
-            time.sleep(1)  # Be nice to the API
+            time.sleep(1)
         
         if results:
             formatted_results = format_results(results)
             display_results(book, formatted_results)
             
-            # Ask for selection immediately after showing results
             print(f"\nSelect books to download for: {book['original_line']}")
-            print("Enter numbers separated by commas (e.g., 1,3,5) or 'skip' to skip:")
+            print(f"Enter numbers separated by commas (e.g., 1,3,5) or 'skip' to skip:")
+            print(f"Progress: Selected {len(downloads)} books so far ({book_num}/{total_books} books processed)")
             
-            try:
-                choice = input("> ").strip().lower()
-                
-                if choice != 'skip' and choice != '':
-                    # Parse selection
+            while True:
+                try:
+                    choice = input("> ").strip().lower()
+                    
+                    if choice == 'skip' or choice == '':
+                        break
+                    
                     selected_indices = []
+                    invalid_selections = []
+                    
                     for num_str in choice.split(','):
                         try:
                             num = int(num_str.strip())
                             if 1 <= num <= len(formatted_results):
                                 selected_indices.append(num - 1)
                             else:
-                                print(f"Invalid selection: {num}")
+                                invalid_selections.append(num_str.strip())
                         except ValueError:
-                            print(f"Invalid input: {num_str}")
+                            invalid_selections.append(num_str.strip())
                     
-                    # Add selected books to download list
-                    for idx in selected_indices:
-                        result = formatted_results[idx]
-                        downloads.append({
-                            'book': book,
-                            'result': result
-                        })
-                        print(f"✓ Added: {result.get('Title', 'Unknown Title')}")
+                    if invalid_selections:
+                        print(f"Invalid selection(s): {', '.join(invalid_selections)}")
+                        print(f"Please enter numbers between 1 and {len(formatted_results)}, or 'skip':")
+                        continue
+                    
+                    if selected_indices:
+                        for idx in selected_indices:
+                            result = formatted_results[idx]
+                            downloads.append({
+                                'book': book,
+                                'result': result
+                            })
+                            print(f"✓ Added: {result.get('Title', 'Unknown Title')}")
+                    
+                    break
                         
-            except KeyboardInterrupt:
-                print("\nSelection cancelled.")
-                break
+                except KeyboardInterrupt:
+                    print("\nSelection cancelled.")
+                    return
         else:
             print(f"No results found for: {book['original_line']}")
+            not_found.append(book['original_line'])
     
-    # Download all selected books at the end
-    
-    # Download selected books
     if downloads:
         print(f"\n{'='*80}")
         print(f"DOWNLOADING {len(downloads)} BOOKS")
@@ -270,12 +261,9 @@ def main():
                 print("  ✗ No download links found")
                 continue
             
-            # Try to download from available links
-            title = result.get('Title', 'Unknown')
             extension = result.get('Extension', 'pdf')
             
-            # Clean filename
-            safe_title = re.sub(r'[<>:"/\\|?*]', '_', title)
+            safe_title = re.sub(r'[<>:"/\\|?*]', '_', book['original_line'])
             filename = f"{safe_title}.{extension}"
             filepath = os.path.join(download_dir, filename)
             
@@ -286,17 +274,35 @@ def main():
                     if download_file(url, filepath):
                         downloaded = True
                         break
-                    time.sleep(2)  # Wait between attempts
+                    time.sleep(2)
             
             if not downloaded:
                 print(f"  ✗ Failed to download from all available links")
+                not_downloaded.append(book['original_line'])
         
         print(f"\nDownloads completed! Check the '{download_dir}' folder.")
+        
+        if not_found:
+            print(f"\n📚 Books not found ({len(not_found)}):")
+            for book in not_found:
+                print(f"  - {book}")
+        
+        if not_downloaded:
+            print(f"\n❌ Books found but failed to download ({len(not_downloaded)}):")
+            for book in not_downloaded:
+                print(f"  - {book}")
+        
+        if not not_found and not not_downloaded:
+            print("🎉 All selected books downloaded successfully!")
     else:
         print("\nNo books selected for download.")
+        
+        if not_found:
+            print(f"\n📚 Books not found ({len(not_found)}):")
+            for book in not_found:
+                print(f"  - {book}")
 
 if __name__ == "__main__":
-    # Check if libgen-api is installed
     try:
         import libgen_api
     except ImportError:
