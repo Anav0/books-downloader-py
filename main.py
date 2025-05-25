@@ -6,6 +6,8 @@ import requests
 from libgen_api import LibgenSearch
 from urllib.parse import urlparse
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def parse_books_file(filename='books.txt'):
     books = []
@@ -134,7 +136,7 @@ def get_download_links(result):
 
 def download_file(url, filename, chunk_size=8192):
     try:
-        response = requests.get(url, stream=True)
+        response = requests.get(url, stream=True, timeout=30)
         response.raise_for_status()
         
         total_size = int(response.headers.get('content-length', 0))
@@ -145,17 +147,41 @@ def download_file(url, filename, chunk_size=8192):
                 if chunk:
                     f.write(chunk)
                     downloaded += len(chunk)
-                    
-                    if total_size > 0:
-                        progress = (downloaded / total_size) * 100
-                        print(f"\rDownloading {filename}: {progress:.1f}%", end='', flush=True)
         
-        print(f"\n✓ Downloaded: {filename}")
-        return True
+        return True, filename
         
     except Exception as e:
-        print(f"\n✗ Error downloading {filename}: {e}")
-        return False
+        return False, f"Error downloading {filename}: {e}"
+
+def download_single_book(download_item, download_dir):
+    book = download_item['book']
+    result = download_item['result']
+    
+    book_title = result.get('Title', 'Unknown Title')
+    book_author = result.get('Author', 'Unknown Author')
+    
+    try:
+        download_links = get_download_links(result)
+        
+        if not download_links:
+            return False, book['original_line'], f"No download links found for {book_title}"
+        
+        extension = result.get('Extension', 'pdf')
+        safe_title = re.sub(r'[<>:"/\\|?*]', '_', book['original_line'])
+        filename = f"{safe_title}.{extension}"
+        filepath = os.path.join(download_dir, filename)
+        
+        for link_name, url in download_links.items():
+            if url:
+                success, message = download_file(url, filepath)
+                if success:
+                    return True, book['original_line'], f"Downloaded: {filename}"
+                time.sleep(1)
+        
+        return False, book['original_line'], f"Failed to download from all available links"
+        
+    except Exception as e:
+        return False, book['original_line'], f"Error processing {book_title}: {e}"
 
 def main():
     print("LibGen Book Search and Download Tool")
@@ -248,39 +274,36 @@ def main():
         download_dir = "downloaded_books"
         os.makedirs(download_dir, exist_ok=True)
         
-        for i, download in enumerate(downloads, 1):
-            book = download['book']
-            result = download['result']
-            
-            print(f"\n[{i}/{len(downloads)}] Getting download links for:")
-            print(f"  {result.get('Title', 'Unknown Title')} by {result.get('Author', 'Unknown Author')}")
-            
-            download_links = get_download_links(result)
-            
-            if not download_links:
-                print("  ✗ No download links found")
-                continue
-            
-            extension = result.get('Extension', 'pdf')
-            
-            safe_title = re.sub(r'[<>:"/\\|?*]', '_', book['original_line'])
-            filename = f"{safe_title}.{extension}"
-            filepath = os.path.join(download_dir, filename)
-            
-            downloaded = False
-            for link_name, url in download_links.items():
-                if url:
-                    print(f"  Trying {link_name}...")
-                    if download_file(url, filepath):
-                        downloaded = True
-                        break
-                    time.sleep(2)
-            
-            if not downloaded:
-                print(f"  ✗ Failed to download from all available links")
-                not_downloaded.append(book['original_line'])
+        print(f"Starting download of {len(downloads)} books using multithreading...")
+        print("This may take a while depending on file sizes and connection speed.\n")
         
-        print(f"\nDownloads completed! Check the '{download_dir}' folder.")
+        successful_downloads = []
+        failed_downloads = []
+        
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            future_to_book = {
+                executor.submit(download_single_book, download, download_dir): download 
+                for download in downloads
+            }
+            
+            completed = 0
+            for future in as_completed(future_to_book):
+                completed += 1
+                success, book_name, message = future.result()
+                
+                if success:
+                    print(f"[{completed}/{len(downloads)}] ✓ {message}")
+                    successful_downloads.append(book_name)
+                else:
+                    print(f"[{completed}/{len(downloads)}] ✗ {message}")
+                    failed_downloads.append(book_name)
+        
+        print(f"\nDownload Summary:")
+        print(f"✓ Successfully downloaded: {len(successful_downloads)}")
+        print(f"✗ Failed to download: {len(failed_downloads)}")
+        print(f"Check the '{download_dir}' folder for downloaded files.")
+        
+        not_downloaded.extend(failed_downloads)
         
         if not_found:
             print(f"\n📚 Books not found ({len(not_found)}):")
@@ -292,6 +315,27 @@ def main():
             for book in not_downloaded:
                 print(f"  - {book}")
         
+        if not_found or not_downloaded:
+            print(f"\nWould you like to save the missing books to 'missing.txt'? (y/n)")
+            try:
+                save_choice = input("> ").strip().lower()
+                if save_choice in ['y', 'yes']:
+                    with open('missing.txt', 'w', encoding='utf-8') as f:
+                        if not_found:
+                            f.write("# Books not found in LibGen:\n")
+                            for book in not_found:
+                                f.write(f"{book}\n")
+                            f.write("\n")
+                        
+                        if not_downloaded:
+                            f.write("# Books found but failed to download:\n")
+                            for book in not_downloaded:
+                                f.write(f"{book}\n")
+                    
+                    print("✓ Missing books saved to 'missing.txt'")
+            except KeyboardInterrupt:
+                print("\nSkipped saving missing books.")
+        
         if not not_found and not not_downloaded:
             print("🎉 All selected books downloaded successfully!")
     else:
@@ -301,6 +345,19 @@ def main():
             print(f"\n📚 Books not found ({len(not_found)}):")
             for book in not_found:
                 print(f"  - {book}")
+            
+            print(f"\nWould you like to save the missing books to 'missing.txt'? (y/n)")
+            try:
+                save_choice = input("> ").strip().lower()
+                if save_choice in ['y', 'yes']:
+                    with open('missing.txt', 'w', encoding='utf-8') as f:
+                        f.write("# Books not found in LibGen:\n")
+                        for book in not_found:
+                            f.write(f"{book}\n")
+                    
+                    print("✓ Missing books saved to 'missing.txt'")
+            except KeyboardInterrupt:
+                print("\nSkipped saving missing books.")
 
 if __name__ == "__main__":
     try:
